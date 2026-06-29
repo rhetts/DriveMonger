@@ -1,12 +1,18 @@
 package ui
 
-import "github.com/rhetts/DriveMonger/internal/scan"
+import (
+	"image/color"
+
+	"github.com/rhetts/DriveMonger/internal/scan"
+)
 
 // tile is a single rectangle in a laid-out treemap, tying a node to the pixel
 // region it occupies.
 type tile struct {
 	node       *scan.Node
 	x, y, w, h float32
+	depth      int         // 0 = direct child of the current node, 1 = nested grandchild
+	fill       color.NRGBA // assigned by the renderer when drawing
 }
 
 // layoutTreemap arranges nodes (already sorted by descending size) into the
