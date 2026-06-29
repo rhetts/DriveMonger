@@ -1,0 +1,25 @@
+# Binaries
+/DriveMonger
+/DriveMonger.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test / coverage
+*.test
+*.out
+
+# Fyne packaging output
+/fyne-cross/
+*.app
+
+# Editor / IDE
+.vs/
+.idea/
+.vscode/
+*.swp
+
+# OS cruft
+.DS_Store
+Thumbs.db
