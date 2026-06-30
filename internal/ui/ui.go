@@ -95,7 +95,25 @@ func (u *UI) buildContent() fyne.CanvasObject {
 	})
 	u.upBtn.Disable()
 	u.crumb = widget.NewLabel("No folder scanned")
-	treemapTop := container.NewBorder(nil, nil, u.upBtn, nil, u.crumb)
+
+	// Live control to tune the adaptive-nesting threshold while testing values.
+	tierValue := widget.NewLabel(fmt.Sprintf("%.0f%%", u.treemap.TierAreaFraction*100))
+	tierSlider := widget.NewSlider(0.05, 0.50)
+	tierSlider.Step = 0.05
+	tierSlider.Value = u.treemap.TierAreaFraction
+	tierSlider.OnChanged = func(v float64) {
+		u.treemap.TierAreaFraction = v
+		tierValue.SetText(fmt.Sprintf("%.0f%%", v*100))
+		u.treemap.Refresh()
+	}
+	tierControl := container.NewHBox(
+		widget.NewLabel("Add tier when box >"),
+		container.NewGridWrap(fyne.NewSize(150, 34), tierSlider),
+		tierValue,
+		widget.NewLabel("of display"),
+	)
+
+	treemapTop := container.NewBorder(nil, nil, u.upBtn, tierControl, u.crumb)
 	treemapTab := container.NewBorder(treemapTop, nil, nil, nil, u.treemap)
 
 	tabs := container.NewAppTabs(

@@ -11,9 +11,15 @@ import (
 	"github.com/rhetts/DriveMonger/internal/scan"
 )
 
-// maxTiers is how many levels of nested boxes the treemap shows by default
-// (e.g. 3 = folder -> subfolder -> its files).
-const maxTiers = 3
+// defaultTierAreaFraction is the starting threshold for adaptive nesting: a box
+// is subdivided into another tier only if its area exceeds this fraction of the
+// whole display area. Tunable at runtime via Treemap.TierAreaFraction.
+const defaultTierAreaFraction = 0.25
+
+// maxNestDepth is a hard safety cap on recursion depth. The area threshold
+// already bounds nesting (boxes shrink each level); this just guards against
+// pathological inputs (e.g. a tiny fraction on a huge display).
+const maxNestDepth = 16
 
 // Layout constants for nested tiles (in pixels).
 const (
@@ -40,6 +46,11 @@ type Treemap struct {
 	current *scan.Node
 	tiles   []tile // last computed layout, retained for hit-testing taps
 
+	// TierAreaFraction controls adaptive nesting: a box is subdivided into a
+	// deeper tier only when its area exceeds this fraction of the whole display
+	// area. Smaller values nest more aggressively.
+	TierAreaFraction float64
+
 	// OnDrill is invoked when the user taps a directory tile that has children.
 	OnDrill func(*scan.Node)
 	// OnSelect is invoked when the user taps any tile (file or directory).
@@ -48,7 +59,7 @@ type Treemap struct {
 
 // NewTreemap returns an empty treemap widget.
 func NewTreemap() *Treemap {
-	t := &Treemap{}
+	t := &Treemap{TierAreaFraction: defaultTierAreaFraction}
 	t.ExtendBaseWidget(t)
 	return t
 }
@@ -116,7 +127,8 @@ func (r *treemapRenderer) rebuild(size fyne.Size) {
 		return
 	}
 
-	r.place(r.tm.current.Children, 0, 0, size.Width, size.Height, 0, color.NRGBA{})
+	totalArea := size.Width * size.Height
+	r.place(r.tm.current.Children, 0, 0, size.Width, size.Height, 0, color.NRGBA{}, totalArea)
 
 	// Tiles are appended parent-before-child, so drawing in order puts each
 	// nested box on top of its parent. Labels come last, above all rectangles.
@@ -131,33 +143,36 @@ func (r *treemapRenderer) rebuild(size fyne.Size) {
 }
 
 // place lays nodes out within the rectangle and recurses into directory tiles
-// that have room, up to maxTiers deep. Each tile is appended to r.tm.tiles in
+// large enough to warrant another tier. A box is subdivided only when its area
+// exceeds TierAreaFraction of totalArea (the whole display), so detail is added
+// adaptively to the biggest boxes. Each tile is appended to r.tm.tiles in
 // parent-before-child order. depth is the current tier (0-based); parentFill is
 // the fill of the enclosing tile, used to tint nested tiles.
-func (r *treemapRenderer) place(nodes []*scan.Node, x, y, w, h float32, depth int, parentFill color.NRGBA) {
+func (r *treemapRenderer) place(nodes []*scan.Node, x, y, w, h float32, depth int, parentFill color.NRGBA, totalArea float32) {
 	var local []tile
 	layoutTreemap(nodes, x, y, w, h, &local)
 
 	for i := range local {
 		t := local[i]
-		t.depth = depth
 		if depth == 0 {
 			t.fill = tileColor(i)
 		} else {
 			t.fill = shade(parentFill, i)
 		}
-		// Subdivide a directory tile when another tier is allowed and it has
-		// both children and enough room for a header plus nested boxes.
-		t.subdivided = depth+1 < maxTiers &&
-			t.node.IsDir && len(t.node.Children) > 0 &&
-			t.w > 2*innerPad+minNestEdge && t.h > headerH+innerPad+minNestEdge
+		// Add a tier inside this box when it is a non-empty directory, big
+		// enough relative to the whole display, has physical room for a header
+		// plus nested boxes, and we are under the safety depth cap.
+		bigEnough := float64(t.w*t.h) > r.tm.TierAreaFraction*float64(totalArea)
+		hasRoom := t.w > 2*innerPad+minNestEdge && t.h > headerH+innerPad+minNestEdge
+		t.subdivided = bigEnough && hasRoom && depth < maxNestDepth &&
+			t.node.IsDir && len(t.node.Children) > 0
 		r.tm.tiles = append(r.tm.tiles, t)
 
 		if t.subdivided {
 			r.place(t.node.Children,
 				t.x+innerPad, t.y+headerH,
 				t.w-2*innerPad, t.h-headerH-innerPad,
-				depth+1, t.fill)
+				depth+1, t.fill, totalArea)
 		}
 	}
 }
