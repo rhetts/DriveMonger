@@ -11,10 +11,19 @@ import (
 	"github.com/rhetts/DriveMonger/internal/scan"
 )
 
-// Layout constants for nested tiles.
+// Layout constants for nested tiles (in pixels).
 const (
-	headerH  = 16 // strip reserved at the top of a parent tile for its label
-	innerPad = 2  // padding between a parent tile's edge and its nested children
+	headerH      = 16 // strip reserved at the top of a parent tile for its label
+	innerPad     = 2  // padding between a parent tile's edge and its nested children
+	minNestEdge  = 14 // a parent tile needs at least this much room to be subdivided
+	subLabelMinH = 16 // a nested child tile needs at least this height to be labeled
+	labelPad     = 3  // inset of label text from its tile's top-left corner
+)
+
+var (
+	bgColor     = color.NRGBA{R: 30, G: 30, B: 34, A: 255} // empty-treemap background
+	borderColor = color.NRGBA{R: 20, G: 20, B: 24, A: 255} // tile outline
+	labelColor  = color.NRGBA{R: 245, G: 245, B: 245, A: 255}
 )
 
 // Treemap is a custom widget that renders a directory's children as rectangles
@@ -98,7 +107,7 @@ func (r *treemapRenderer) rebuild(size fyne.Size) {
 
 	if r.tm.current == nil || !r.tm.current.IsDir || len(r.tm.current.Children) == 0 {
 		// Nothing to show: leave a blank background.
-		bg := canvas.NewRectangle(color.NRGBA{R: 30, G: 30, B: 34, A: 255})
+		bg := canvas.NewRectangle(bgColor)
 		bg.Resize(size)
 		r.objects = append(r.objects, bg)
 		return
@@ -116,7 +125,7 @@ func (r *treemapRenderer) rebuild(size fyne.Size) {
 		// Level 1: subdivide directory tiles that have children and enough room.
 		parent := top[i].node
 		if parent.IsDir && len(parent.Children) > 0 &&
-			top[i].w > 2*innerPad+14 && top[i].h > headerH+innerPad+14 {
+			top[i].w > 2*innerPad+minNestEdge && top[i].h > headerH+innerPad+minNestEdge {
 			var subs []tile
 			layoutTreemap(parent.Children,
 				top[i].x+innerPad,
@@ -154,7 +163,7 @@ func (r *treemapRenderer) rebuild(size fyne.Size) {
 // rectFor builds the colored, bordered rectangle for a tile.
 func rectFor(ti tile) *canvas.Rectangle {
 	rect := canvas.NewRectangle(ti.fill)
-	rect.StrokeColor = color.NRGBA{R: 20, G: 20, B: 24, A: 255}
+	rect.StrokeColor = borderColor
 	rect.StrokeWidth = 1
 	rect.Move(fyne.NewPos(ti.x, ti.y))
 	rect.Resize(fyne.NewSize(ti.w, ti.h))
@@ -170,18 +179,18 @@ func labelFor(ti tile) fyne.CanvasObject {
 	// covered by nested children), so it just needs room for the header.
 	minH := headerH
 	if ti.depth == 1 {
-		minH = 16
+		minH = subLabelMinH
 	}
 	if ti.w < 40 || ti.h < float32(minH) {
 		return nil
 	}
-	label := fitText(ti.node.Name+"  "+scan.HumanSize(ti.node.Size), ti.w-6, textSize)
+	label := fitText(ti.node.Name+"  "+scan.HumanSize(ti.node.Size), ti.w-2*labelPad, textSize)
 	if label == "" {
 		return nil
 	}
 	txt := canvas.NewText(label, labelColor)
 	txt.TextSize = textSize
-	txt.Move(fyne.NewPos(ti.x+3, ti.y+1))
+	txt.Move(fyne.NewPos(ti.x+labelPad, ti.y+1))
 	return txt
 }
 
@@ -198,8 +207,6 @@ func fitText(s string, w, textSize float32) string {
 	}
 	return string(r[:maxChars-1]) + "…"
 }
-
-var labelColor = color.NRGBA{R: 245, G: 245, B: 245, A: 255}
 
 // tileColor returns a stable, visually distinct fill color for the i-th
 // top-level tile by stepping hue along the golden ratio.

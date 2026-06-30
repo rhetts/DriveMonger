@@ -21,7 +21,6 @@ import (
 
 // UI holds the application's widgets and the currently scanned tree.
 type UI struct {
-	app fyne.App
 	win fyne.Window
 
 	root        *scan.Node
@@ -42,7 +41,6 @@ type UI struct {
 func Run() {
 	a := app.NewWithID("com.rhetts.drivemonger")
 	u := &UI{
-		app:         a,
 		win:         a.NewWindow("DriveMonger"),
 		nodesByPath: map[string]*scan.Node{},
 	}
@@ -87,10 +85,8 @@ func (u *UI) buildContent() fyne.CanvasObject {
 
 	// --- treemap tab ---
 	u.treemap = NewTreemap()
-	u.treemap.OnDrill = func(n *scan.Node) { u.setTreemapNode(n) }
-	u.treemap.OnSelect = func(n *scan.Node) {
-		u.status.SetText(fmt.Sprintf("%s  —  %s", n.Path, scan.HumanSize(n.Size)))
-	}
+	u.treemap.OnDrill = u.setTreemapNode
+	u.treemap.OnSelect = u.showStatus
 
 	u.upBtn = widget.NewButton("⬆ Up", func() {
 		if u.tmCurrent != nil && u.tmCurrent.Parent != nil {
@@ -154,13 +150,18 @@ func (u *UI) buildTree() *widget.Tree {
 	)
 	t.OnSelected = func(uid widget.TreeNodeID) {
 		if n := u.nodesByPath[uid]; n != nil {
-			u.status.SetText(fmt.Sprintf("%s  —  %s", n.Path, scan.HumanSize(n.Size)))
+			u.showStatus(n)
 			if n.IsDir && len(n.Children) > 0 {
 				u.setTreemapNode(n)
 			}
 		}
 	}
 	return t
+}
+
+// showStatus updates the status bar to describe a single node.
+func (u *UI) showStatus(n *scan.Node) {
+	u.status.SetText(fmt.Sprintf("%s  —  %s", n.Path, scan.HumanSize(n.Size)))
 }
 
 // startScan runs a scan of path in the background, showing a cancellable
@@ -183,8 +184,8 @@ func (u *UI) startScan(path string) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				d, f, b := prog.Dirs.Load(), prog.Files.Load(), prog.Bytes.Load()
-				text := fmt.Sprintf("Dirs: %d   Files: %d   Size: %s", d, f, scan.HumanSize(b))
+				dirs, files, bytes := prog.Dirs.Load(), prog.Files.Load(), prog.Bytes.Load()
+				text := fmt.Sprintf("Dirs: %d   Files: %d   Size: %s", dirs, files, scan.HumanSize(bytes))
 				fyne.Do(func() { msg.SetText(text) })
 			}
 		}

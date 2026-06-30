@@ -28,18 +28,27 @@ type Node struct {
 }
 
 // Progress carries live counters while a scan is running so the UI can show
-// feedback. All fields are updated atomically by the scanner goroutine.
+// feedback. All fields are updated atomically by the scanner goroutines.
 type Progress struct {
 	Dirs  atomic.Int64 // directories visited
 	Files atomic.Int64 // files visited
 	Bytes atomic.Int64 // total bytes accounted for so far
 }
 
+// TotalSize returns the summed Size of nodes.
+func TotalSize(nodes []*Node) int64 {
+	var total int64
+	for _, n := range nodes {
+		total += n.Size
+	}
+	return total
+}
+
 // Scan walks root and returns the populated tree. The context can be cancelled
 // to abort an in-progress scan; on cancellation the partially built tree is
 // returned along with ctx.Err(). Unreadable directories (permission denied,
 // etc.) are skipped rather than aborting the whole scan.
-func Scan(ctx context.Context, root string, p *Progress) (*Node, error) {
+func Scan(ctx context.Context, root string, prog *Progress) (*Node, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -58,23 +67,29 @@ func Scan(ctx context.Context, root string, p *Progress) (*Node, error) {
 
 	if !rootNode.IsDir {
 		rootNode.Size = info.Size()
-		if p != nil {
-			p.Files.Add(1)
-			p.Bytes.Add(info.Size())
-		}
+		countFile(prog, info.Size())
 		return rootNode, nil
 	}
 
-	if p != nil {
-		p.Dirs.Add(1)
-	}
+	countDir(prog)
 	sem := make(chan struct{}, parallelism)
-	walk(ctx, rootNode, p, sem)
+	walk(ctx, rootNode, prog, sem)
 	sortTree(rootNode)
-	if err := ctx.Err(); err != nil {
-		return rootNode, err
+	return rootNode, ctx.Err()
+}
+
+// countDir and countFile record progress, tolerating a nil Progress.
+func countDir(prog *Progress) {
+	if prog != nil {
+		prog.Dirs.Add(1)
 	}
-	return rootNode, nil
+}
+
+func countFile(prog *Progress, size int64) {
+	if prog != nil {
+		prog.Files.Add(1)
+		prog.Bytes.Add(size)
+	}
 }
 
 // walk fills in node's children and accumulates sizes. Subdirectories are
@@ -86,7 +101,7 @@ func Scan(ctx context.Context, root string, p *Progress) (*Node, error) {
 // node.Children; each child goroutine mutates only its own subtree, and the
 // parent reads child.Size after childWg.Wait() establishes happens-before.
 // Progress counters are atomic.
-func walk(ctx context.Context, node *Node, p *Progress, sem chan struct{}) {
+func walk(ctx context.Context, node *Node, prog *Progress, sem chan struct{}) {
 	entries, err := os.ReadDir(node.Path)
 	if err != nil {
 		// Skip directories we cannot read (permissions, junctions, etc.).
@@ -102,54 +117,47 @@ func walk(ctx context.Context, node *Node, p *Progress, sem chan struct{}) {
 		default:
 		}
 
-		full := filepath.Join(node.Path, entry.Name())
 		child := &Node{
 			Name:   entry.Name(),
-			Path:   full,
+			Path:   filepath.Join(node.Path, entry.Name()),
 			IsDir:  entry.IsDir(),
 			Parent: node,
 		}
+		node.Children = append(node.Children, child)
 
-		if entry.IsDir() {
-			if p != nil {
-				p.Dirs.Add(1)
-			}
-			// Don't follow symlinked directories to avoid cycles and
-			// double-counting; entry.IsDir() is false for symlinks so the
-			// else-branch below handles them as plain entries.
-			childWg.Add(1)
-			select {
-			case sem <- struct{}{}:
-				go func(c *Node) {
-					defer childWg.Done()
-					defer func() { <-sem }()
-					walk(ctx, c, p, sem)
-				}(child)
-			default:
-				// No free slot: walk inline so we don't block holding nothing.
-				walk(ctx, child, p, sem)
-				childWg.Done()
-			}
-		} else {
-			info, err := entry.Info()
-			if err == nil {
+		if !entry.IsDir() {
+			// Plain file (entry.IsDir() is false for symlinks too, so symlinks
+			// are counted as entries and never followed — avoiding cycles and
+			// double-counting).
+			if info, err := entry.Info(); err == nil {
 				child.Size = info.Size()
 			}
-			if p != nil {
-				p.Files.Add(1)
-				p.Bytes.Add(child.Size)
-			}
+			countFile(prog, child.Size)
+			continue
 		}
 
-		node.Children = append(node.Children, child)
+		countDir(prog)
+		// Scan the subdirectory in a worker if a slot is free, else inline. A
+		// goroutine never holds a slot while waiting on its own children, so
+		// the recursion cannot deadlock.
+		childWg.Add(1)
+		select {
+		case sem <- struct{}{}:
+			go func(c *Node) {
+				defer childWg.Done()
+				defer func() { <-sem }()
+				walk(ctx, c, prog, sem)
+			}(child)
+		default:
+			walk(ctx, child, prog, sem)
+			childWg.Done()
+		}
 	}
 
 	// Wait for concurrently-scanned subdirectories to finish, then total up the
 	// children's sizes (directory sizes are only known once their walk returns).
 	childWg.Wait()
-	for _, c := range node.Children {
-		node.Size += c.Size
-	}
+	node.Size = TotalSize(node.Children)
 }
 
 // sortTree orders every directory's children by descending size so the largest

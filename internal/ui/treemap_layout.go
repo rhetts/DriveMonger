@@ -29,10 +29,7 @@ func layoutTreemap(nodes []*scan.Node, x, y, w, h float32, out *[]tile) {
 		return
 	}
 
-	var total int64
-	for _, n := range nodes {
-		total += n.Size
-	}
+	total := scan.TotalSize(nodes)
 	if total <= 0 {
 		// All zero-sized; fall back to equal horizontal slices so empty dirs
 		// are still visible and clickable.
@@ -62,11 +59,7 @@ func layoutTreemap(nodes []*scan.Node, x, y, w, h float32, out *[]tile) {
 		split = len(nodes) - 1
 	}
 
-	var firstSize int64
-	for _, n := range nodes[:split] {
-		firstSize += n.Size
-	}
-	frac := float32(float64(firstSize) / float64(total))
+	frac := float32(float64(scan.TotalSize(nodes[:split])) / float64(total))
 
 	if w >= h {
 		w1 := w * frac

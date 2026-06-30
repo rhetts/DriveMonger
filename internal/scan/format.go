@@ -2,6 +2,9 @@ package scan
 
 import "fmt"
 
+// sizeUnits are the binary (1024-based) magnitude suffixes above bytes.
+var sizeUnits = []string{"KB", "MB", "GB", "TB", "PB", "EB"}
+
 // HumanSize formats a byte count as a human-readable string using binary
 // (1024-based) units, e.g. 1536 -> "1.5 KB".
 func HumanSize(bytes int64) string {
@@ -14,6 +17,5 @@ func HumanSize(bytes int64) string {
 		div *= unit
 		exp++
 	}
-	units := []string{"KB", "MB", "GB", "TB", "PB", "EB"}
-	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
+	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), sizeUnits[exp])
 }
