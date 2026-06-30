@@ -11,12 +11,16 @@ import (
 	"github.com/rhetts/DriveMonger/internal/scan"
 )
 
+// maxTiers is how many levels of nested boxes the treemap shows by default
+// (e.g. 3 = folder -> subfolder -> its files).
+const maxTiers = 3
+
 // Layout constants for nested tiles (in pixels).
 const (
 	headerH      = 16 // strip reserved at the top of a parent tile for its label
 	innerPad     = 2  // padding between a parent tile's edge and its nested children
 	minNestEdge  = 14 // a parent tile needs at least this much room to be subdivided
-	subLabelMinH = 16 // a nested child tile needs at least this height to be labeled
+	subLabelMinH = 16 // an un-subdivided tile needs at least this height to be labeled
 	labelPad     = 3  // inset of label text from its tile's top-left corner
 )
 
@@ -98,9 +102,8 @@ func (r *treemapRenderer) Objects() []fyne.CanvasObject { return r.objects }
 func (r *treemapRenderer) Destroy() {}
 
 // rebuild recomputes the tile layout for the current node over the given size
-// and regenerates the rectangles and labels. It lays out two levels: the
-// current node's children, and within each child directory, that directory's
-// own children.
+// and regenerates the rectangles and labels. It lays out nested boxes up to
+// maxTiers levels deep (current node's children, their children, and so on).
 func (r *treemapRenderer) rebuild(size fyne.Size) {
 	r.tm.tiles = r.tm.tiles[:0]
 	r.objects = r.objects[:0]
@@ -113,49 +116,48 @@ func (r *treemapRenderer) rebuild(size fyne.Size) {
 		return
 	}
 
-	// Level 0: the current node's children across the whole canvas.
-	var top []tile
-	layoutTreemap(r.tm.current.Children, 0, 0, size.Width, size.Height, &top)
+	r.place(r.tm.current.Children, 0, 0, size.Width, size.Height, 0, color.NRGBA{})
 
-	for i := range top {
-		top[i].depth = 0
-		top[i].fill = tileColor(i)
-		r.tm.tiles = append(r.tm.tiles, top[i])
-
-		// Level 1: subdivide directory tiles that have children and enough room.
-		parent := top[i].node
-		if parent.IsDir && len(parent.Children) > 0 &&
-			top[i].w > 2*innerPad+minNestEdge && top[i].h > headerH+innerPad+minNestEdge {
-			var subs []tile
-			layoutTreemap(parent.Children,
-				top[i].x+innerPad,
-				top[i].y+headerH,
-				top[i].w-2*innerPad,
-				top[i].h-headerH-innerPad,
-				&subs)
-			for j := range subs {
-				subs[j].depth = 1
-				subs[j].fill = shade(top[i].fill, j)
-				r.tm.tiles = append(r.tm.tiles, subs[j])
-			}
-		}
-	}
-
-	// Draw parents first, then nested children on top of them, then labels last
-	// so text is never hidden behind a rectangle.
+	// Tiles are appended parent-before-child, so drawing in order puts each
+	// nested box on top of its parent. Labels come last, above all rectangles.
 	for _, ti := range r.tm.tiles {
-		if ti.depth == 0 {
-			r.objects = append(r.objects, rectFor(ti))
-		}
-	}
-	for _, ti := range r.tm.tiles {
-		if ti.depth == 1 {
-			r.objects = append(r.objects, rectFor(ti))
-		}
+		r.objects = append(r.objects, rectFor(ti))
 	}
 	for _, ti := range r.tm.tiles {
 		if obj := labelFor(ti); obj != nil {
 			r.objects = append(r.objects, obj)
+		}
+	}
+}
+
+// place lays nodes out within the rectangle and recurses into directory tiles
+// that have room, up to maxTiers deep. Each tile is appended to r.tm.tiles in
+// parent-before-child order. depth is the current tier (0-based); parentFill is
+// the fill of the enclosing tile, used to tint nested tiles.
+func (r *treemapRenderer) place(nodes []*scan.Node, x, y, w, h float32, depth int, parentFill color.NRGBA) {
+	var local []tile
+	layoutTreemap(nodes, x, y, w, h, &local)
+
+	for i := range local {
+		t := local[i]
+		t.depth = depth
+		if depth == 0 {
+			t.fill = tileColor(i)
+		} else {
+			t.fill = shade(parentFill, i)
+		}
+		// Subdivide a directory tile when another tier is allowed and it has
+		// both children and enough room for a header plus nested boxes.
+		t.subdivided = depth+1 < maxTiers &&
+			t.node.IsDir && len(t.node.Children) > 0 &&
+			t.w > 2*innerPad+minNestEdge && t.h > headerH+innerPad+minNestEdge
+		r.tm.tiles = append(r.tm.tiles, t)
+
+		if t.subdivided {
+			r.place(t.node.Children,
+				t.x+innerPad, t.y+headerH,
+				t.w-2*innerPad, t.h-headerH-innerPad,
+				depth+1, t.fill)
 		}
 	}
 }
@@ -175,13 +177,14 @@ func rectFor(ti tile) *canvas.Rectangle {
 // over neighboring tiles.
 func labelFor(ti tile) fyne.CanvasObject {
 	const textSize float32 = 11
-	// A depth-0 directory tile only exposes its header strip (its body is
-	// covered by nested children), so it just needs room for the header.
-	minH := headerH
-	if ti.depth == 1 {
+	// A subdivided tile only exposes its header strip (its body is covered by
+	// nested children), so it just needs room for the header; an un-subdivided
+	// tile shows in full and needs enough height for a standalone label.
+	minH := float32(headerH)
+	if !ti.subdivided {
 		minH = subLabelMinH
 	}
-	if ti.w < 40 || ti.h < float32(minH) {
+	if ti.w < 40 || ti.h < minH {
 		return nil
 	}
 	label := fitText(ti.node.Name+"  "+scan.HumanSize(ti.node.Size), ti.w-2*labelPad, textSize)

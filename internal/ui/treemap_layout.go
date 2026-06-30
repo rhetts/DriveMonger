@@ -11,8 +11,9 @@ import (
 type tile struct {
 	node       *scan.Node
 	x, y, w, h float32
-	depth      int         // 0 = direct child of the current node, 1 = nested grandchild
+	depth      int         // 0 = direct child of the current node, 1+ = nested deeper
 	fill       color.NRGBA // assigned by the renderer when drawing
+	subdivided bool        // true if this tile was further split into child tiles
 }
 
 // layoutTreemap arranges nodes (already sorted by descending size) into the
